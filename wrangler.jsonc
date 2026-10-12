@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "preguntas-congreso",
+  "main": "src/index.js",
+  "compatibility_date": "2025-10-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "EVENT", "class_name": "EventRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["EventRoom"] }]
+}

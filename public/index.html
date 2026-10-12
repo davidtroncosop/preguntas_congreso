@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Preguntas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner" style="max-width:760px">
+      <div class="brand">
+        <small>Preguntas al ponente</small>
+        <strong id="event-name">Congreso</strong>
+      </div>
+      <span class="live-pill"><span class="dot" id="live-dot"></span><span id="live-text">Conectando…</span></span>
+    </div>
+  </header>
+
+  <main class="wrap stack">
+    <section>
+      <div class="hero">
+        <div class="hero-kicker" id="talk-kicker">Ponencia</div>
+        <div class="hero-band" id="talk-band"><h1 id="talk-title">Cargando…</h1></div>
+        <div class="hero-sub" id="talk-speaker"></div>
+      </div>
+    </section>
+
+    <section class="card sky stack" id="ask" hidden style="margin-top:28px">
+      <h2>Haz tu pregunta</h2>
+      <form id="form" class="stack">
+        <textarea id="text" maxlength="300" required placeholder="Escribe aquí tu pregunta para el ponente…" aria-label="Tu pregunta"></textarea>
+        <div class="counter"><span id="count">0</span>/300</div>
+        <input id="author" maxlength="60" placeholder="Tu nombre (opcional)" autocomplete="name" aria-label="Tu nombre" />
+        <button class="coral wide" id="send">Enviar pregunta</button>
+        <div class="muted" style="font-size:13px;text-align:center">El moderador revisa las preguntas antes de publicarlas.</div>
+      </form>
+      <div id="notice" hidden></div>
+    </section>
+
+    <section class="stack" style="margin-top:36px">
+      <div>
+        <div class="eyebrow">Del público</div>
+        <div class="row" style="align-items:flex-end;margin-top:4px">
+          <h2 class="section-title">Preguntas <b>publicadas</b></h2>
+          <span class="spacer"></span>
+          <span class="muted" style="font-size:13px">Vota las que quieras que se respondan</span>
+        </div>
+      </div>
+      <ul class="q-list" id="questions"></ul>
+    </section>
+  </main>
+
+  <script type="module">
+    import { $, esc, timeAgo, store, liveSocket } from "/app.js";
+
+    let voter = store("voter");
+    if (!voter) { voter = crypto.randomUUID(); store("voter", voter); }
+    const myVotes = new Set(JSON.parse(store("votes") || "[]"));
+    const saveVotes = () => store("votes", JSON.stringify([...myVotes]));
+    $("#author").value = store("author") || "";
+
+    let state = null;
+
+    function render() {
+      if (!state) return;
+      $("#event-name").textContent = state.eventName;
+      document.title = `Preguntas · ${state.eventName}`;
+      const t = state.talk;
+      $("#talk-kicker").textContent = t ? "Ahora · abierta a preguntas" : "En pausa";
+      $("#talk-band").classList.toggle("idle", !t);
+      $("#talk-title").textContent = t ? t.title : "Sin ponencia abierta";
+      $("#talk-speaker").innerHTML = t
+        ? (t.speaker ? `Ponente: <strong>${esc(t.speaker)}</strong>` : "")
+        : "Las preguntas se abrirán al terminar cada ponencia. Esta página se actualiza sola.";
+      $("#talk-speaker").hidden = !$("#talk-speaker").innerHTML;
+      $("#ask").hidden = !t;
+
+      const list = $("#questions");
+      if (!t) { list.innerHTML = `<li class="card plain empty">Aquí aparecerán las preguntas de la próxima ponencia.</li>`; return; }
+      if (!state.questions.length) {
+        list.innerHTML = `<li class="card plain empty">Aún no hay preguntas publicadas. ¡Sé el primero!</li>`;
+        return;
+      }
+      list.innerHTML = state.questions.map((q) => {
+        const answered = q.status === "answered";
+        const on = myVotes.has(q.id);
+        return `<li class="card q ${answered ? "answered" : ""}">
+          <button class="vote ${on ? "on" : ""}" data-id="${q.id}" ${answered ? "disabled" : ""} aria-pressed="${on}" aria-label="Votar">
+            <span>▲</span><strong>${q.votes}</strong>
+          </button>
+          <div style="flex:1;min-width:0">
+            <div class="q-text">${esc(q.text)}</div>
+            <div class="q-meta">${q.author ? esc(q.author) : "Anónimo"} · ${timeAgo(q.created_at)}
+              ${answered ? ` · <span class="badge ok">Respondida</span>` : ""}</div>
+          </div>
+        </li>`;
+      }).join("");
+    }
+
+    function notice(kind, msg) {
+      const n = $("#notice");
+      n.className = `notice ${kind}`;
+      n.textContent = msg;
+      n.hidden = false;
+    }
+
+    $("#text").addEventListener("input", (e) => ($("#count").textContent = e.target.value.length));
+
+    $("#form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const text = $("#text").value.trim();
+      const author = $("#author").value.trim();
+      store("author", author || null);
+      $("#send").disabled = true;
+      try {
+        const res = await fetch("/api/questions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ text, author, voter }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "No se pudo enviar.");
+        $("#text").value = "";
+        $("#count").textContent = "0";
+        notice("ok", "¡Gracias! Tu pregunta se publicará cuando el moderador la apruebe.");
+      } catch (err) {
+        notice("err", err.message);
+      } finally {
+        $("#send").disabled = false;
+      }
+    });
+
+    $("#questions").addEventListener("click", async (e) => {
+      const btn = e.target.closest(".vote");
+      if (!btn || btn.disabled) return;
+      const id = Number(btn.dataset.id);
+      btn.disabled = true;
+      try {
+        const res = await fetch("/api/vote", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ questionId: id, voter }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          data.voted ? myVotes.add(id) : myVotes.delete(id);
+          saveVotes();
+        }
+      } finally {
+        btn.disabled = false;
+        render();
+      }
+    });
+
+    liveSocket("/ws?role=public", {
+      onState: (s) => { state = s; render(); },
+      onStatus: (live) => {
+        $("#live-dot").classList.toggle("live", live);
+        $("#live-text").textContent = live ? "En vivo" : "Reconectando…";
+      },
+    });
+    setInterval(render, 60000);
+  </script>
+</body>
+</html>
